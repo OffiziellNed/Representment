@@ -1,28 +1,54 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 
 export default function RepresentmentPortal() {
   const [activeTab, setActiveTab] = useState("ALTO");
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  
   const [totalDataCount, setTotalDataCount] = useState(0);
   const [altoData, setAltoData] = useState([]);
   const [rintisData, setRintisData] = useState([]);
 
-  // Fungsi untuk membaca dan memilah file Excel
-  const handleFileUpload = async (e) => {
+  // Trigger proses Excel setiap kali state uploadedFiles berubah
+  useEffect(() => {
+    processFiles(uploadedFiles);
+  }, [uploadedFiles]);
+
+  const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
+    
+    // Tambahkan file baru ke state (gabung dengan yang sudah ada)
+    setUploadedFiles(prev => [...prev, ...files]);
+    
+    // Reset input file agar bisa memilih file yang sama lagi jika dihapus
+    e.target.value = null;
+  };
+
+  const removeFile = (indexToRemove) => {
+    setUploadedFiles(prev => prev.filter((_, index) => index !== indexToRemove));
+  };
+
+  const processFiles = async (fileList) => {
+    if (fileList.length === 0) {
+      setTotalDataCount(0);
+      setAltoData([]);
+      setRintisData([]);
+      return;
+    }
 
     let allParsedData = [];
 
-    for (let file of files) {
+    for (let file of fileList) {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: "array" });
       
       workbook.SheetNames.forEach((sheetName) => {
         const sheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json(sheet);
+        // defval: "" menghindari field terhapus jika kosong di excel
+        const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
         allParsedData = [...allParsedData, ...json];
       });
     }
@@ -32,9 +58,10 @@ export default function RepresentmentPortal() {
     const alto = [];
     const rintis = [];
 
-    // Looping untuk mencari SWTC Code dengan metode yang kebal terhadap spasi/typo header
+    // Logika pencarian SWTC super robust
     allParsedData.forEach((row) => {
-      const swtcKey = Object.keys(row).find(key => key.trim().toLowerCase() === 'swtc code');
+      // Cari key/header yang mengandung huruf "swtc" (mengabaikan spasi atau huruf besar/kecil)
+      const swtcKey = Object.keys(row).find(key => key.trim().toLowerCase().includes('swtc'));
       
       if (swtcKey) {
         const val = String(row[swtcKey]).trim().toUpperCase();
@@ -50,24 +77,63 @@ export default function RepresentmentPortal() {
     setRintisData(rintis);
   };
 
-  // Helper agar data di kolom tetap terbaca meskipun nama header di Excel ada spasi tersembunyi
+  // Helper agar data di kolom tetap terbaca meskipun nama header ada spasi tersembunyi
   const getColVal = (row, colName) => {
-    const key = Object.keys(row).find(k => k.trim().toLowerCase() === colName.toLowerCase());
-    return key && row[key] ? row[key] : "-";
+    // Coba cari exact match dulu, kalau gagal cari yang mengandung kata tersebut
+    let key = Object.keys(row).find(k => k.trim().toLowerCase() === colName.toLowerCase());
+    if (!key) {
+      key = Object.keys(row).find(k => k.trim().toLowerCase().includes(colName.toLowerCase()));
+    }
+    return key && row[key] !== undefined && row[key] !== "" ? row[key] : "-";
+  };
+
+  const handleCopyData = () => {
+    const dataToCopy = activeTab === "ALTO" ? altoData : rintisData;
+    if (dataToCopy.length === 0) {
+      alert("Tidak ada data untuk di-copy.");
+      return;
+    }
+
+    const headers = ["No", "SWTC", "Bank Issuer", "Transaction Date", "Reff Nr", "Id Trx", "Reference", "Transaction Amount", "Merchant Name", "Reason", "Parent Name", "Status", "Invoice"];
+    
+    // Map data menjadi format tab-separated agar rapi saat dipaste di Excel
+    const rows = dataToCopy.map((row, index) => {
+      return [
+        index + 1,
+        getColVal(row, "swtc"),
+        getColVal(row, "Bank Issuer"),
+        getColVal(row, "Transaction Date"),
+        getColVal(row, "Reff Nr"),
+        getColVal(row, "Id Trx"),
+        getColVal(row, "Reference"),
+        getColVal(row, "Transaction Amount"),
+        getColVal(row, "Merchant Name"),
+        getColVal(row, "Reason"),
+        getColVal(row, "Parent Name"),
+        getColVal(row, "Status"),
+        getColVal(row, "Invoice")
+      ].join("\t");
+    });
+
+    const tsvData = [headers.join("\t"), ...rows].join("\n");
+
+    navigator.clipboard.writeText(tsvData)
+      .then(() => alert(`Berhasil meng-copy ${dataToCopy.length} data ${activeTab}!`))
+      .catch(() => alert("Gagal meng-copy data."));
   };
 
   const renderTable = (data) => (
     <div style={{ marginTop: '20px', borderRadius: '8px', border: '1px solid #30363d', backgroundColor: '#0d1117', width: '100%' }}>
-      {/* Table ramping tanpa scroll samping */}
-      <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', color: '#c9d1d9', fontSize: '10px', textAlign: 'left', wordWrap: 'break-word' }}>
+      <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', color: '#c9d1d9', fontSize: '9.5px', textAlign: 'left', wordWrap: 'break-word' }}>
         <thead style={{ backgroundColor: '#21262d', borderBottom: '1px solid #30363d' }}>
           <tr>
             <th style={{ padding: '8px 4px', width: '3%' }}>No</th>
+            <th style={{ padding: '8px 4px', width: '4%' }}>SWTC</th>
             <th style={{ padding: '8px 4px', width: '8%' }}>Bank Issuer</th>
-            <th style={{ padding: '8px 4px', width: '8%' }}>Trx Date</th>
-            <th style={{ padding: '8px 4px', width: '9%' }}>Reff Nr</th>
-            <th style={{ padding: '8px 4px', width: '9%' }}>Id Trx</th>
-            <th style={{ padding: '8px 4px', width: '9%' }}>Reference</th>
+            <th style={{ padding: '8px 4px', width: '7%' }}>Trx Date</th>
+            <th style={{ padding: '8px 4px', width: '8%' }}>Reff Nr</th>
+            <th style={{ padding: '8px 4px', width: '8%' }}>Id Trx</th>
+            <th style={{ padding: '8px 4px', width: '8%' }}>Reference</th>
             <th style={{ padding: '8px 4px', width: '8%' }}>Amount</th>
             <th style={{ padding: '8px 4px', width: '10%' }}>Merchant Name</th>
             <th style={{ padding: '8px 4px', width: '10%' }}>Reason</th>
@@ -81,6 +147,7 @@ export default function RepresentmentPortal() {
             data.map((row, index) => (
               <tr key={index} style={{ borderBottom: '1px solid #30363d' }}>
                 <td style={{ padding: '6px 4px', color: '#ffffff', fontWeight: 'bold' }}>{index + 1}</td>
+                <td style={{ padding: '6px 4px', color: '#3fb950', fontWeight: 'bold' }}>{getColVal(row, "swtc")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Bank Issuer")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Transaction Date")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Reff Nr")}</td>
@@ -96,7 +163,7 @@ export default function RepresentmentPortal() {
             ))
           ) : (
             <tr>
-              <td colSpan="12" style={{ padding: '20px', textAlign: 'center', color: '#8b949e', fontSize: '12px' }}>
+              <td colSpan="13" style={{ padding: '20px', textAlign: 'center', color: '#8b949e', fontSize: '12px' }}>
                 Tidak ada data yang sesuai.
               </td>
             </tr>
@@ -123,15 +190,38 @@ export default function RepresentmentPortal() {
           Upload File Rekapitulasi (.xlsx / .xls)
         </h2>
         
-        {/* Uploader */}
+        {/* Uploader Modern */}
         <div style={{ backgroundColor: '#0d1117', border: '1px dashed #30363d', padding: '20px', borderRadius: '10px', marginBottom: '24px' }}>
-           <input
+          <label style={{ display: 'inline-block', backgroundColor: '#1f6feb', color: '#ffffff', padding: '10px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', transition: 'background-color 0.2s' }}>
+            ➕ Pilih File Excel
+            <input
               type="file"
               multiple
               accept=".xlsx, .xls"
-              onChange={handleFileUpload}
-              style={{ color: '#c9d1d9', fontSize: '13px', width: '100%', cursor: 'pointer' }}
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
             />
+          </label>
+          
+          {/* Daftar File yang diupload dengan opsi Hapus */}
+          {uploadedFiles.length > 0 && (
+            <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {uploadedFiles.map((file, idx) => (
+                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#21262d', border: '1px solid #30363d', padding: '10px 14px', borderRadius: '6px' }}>
+                  <span style={{ color: '#c9d1d9', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    📄 {file.name}
+                  </span>
+                  <button 
+                    onClick={() => removeFile(idx)}
+                    style={{ backgroundColor: 'transparent', border: 'none', color: '#f85149', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', padding: '0 5px' }}
+                    title="Hapus file"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Indikator Hitungan */}
@@ -150,19 +240,28 @@ export default function RepresentmentPortal() {
           </div>
         </div>
 
-        {/* Tab Filter ALTO / RINTIS */}
-        <div style={{ display: 'flex', gap: '10px', borderBottom: '1px solid #30363d', paddingBottom: '16px' }}>
+        {/* Action Bar: Tab Filter & Tombol Copy */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #30363d', paddingBottom: '16px' }}>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button 
+              onClick={() => setActiveTab("ALTO")}
+              style={{ padding: '8px 24px', backgroundColor: activeTab === "ALTO" ? '#1f6feb' : '#21262d', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
+            >
+              ALTO
+            </button>
+            <button 
+              onClick={() => setActiveTab("RINTIS")}
+              style={{ padding: '8px 24px', backgroundColor: activeTab === "RINTIS" ? '#da3633' : '#21262d', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
+            >
+              RINTIS
+            </button>
+          </div>
+          
           <button 
-            onClick={() => setActiveTab("ALTO")}
-            style={{ padding: '8px 24px', backgroundColor: activeTab === "ALTO" ? '#1f6feb' : '#21262d', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
+            onClick={handleCopyData}
+            style={{ padding: '8px 16px', backgroundColor: '#238636', color: '#fff', border: '1px solid #2ea043', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            ALTO
-          </button>
-          <button 
-            onClick={() => setActiveTab("RINTIS")}
-            style={{ padding: '8px 24px', backgroundColor: activeTab === "RINTIS" ? '#da3633' : '#21262d', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
-          >
-            RINTIS
+            📋 Copy Data {activeTab}
           </button>
         </div>
 
