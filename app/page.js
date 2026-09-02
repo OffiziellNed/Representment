@@ -96,6 +96,15 @@ export default function RepresentmentPortal() {
     return key && row[key] !== undefined && row[key] !== "" ? row[key] : "-";
   };
 
+  // Fungsi untuk memformat angka menjadi format Rupiah standar (titik untuk ribuan)
+  const formatRupiah = (value) => {
+    if (!value || value === "-") return "-";
+    // Bersihkan karakter selain angka
+    const num = Number(String(value).replace(/[^0-9.-]+/g, ""));
+    if (isNaN(num)) return value; // Jika bukan angka, kembalikan teks aslinya
+    return "Rp " + num.toLocaleString("id-ID");
+  };
+
   const handleCopyData = () => {
     let dataToCopy = [];
     if (activeTab === "ALTO") dataToCopy = altoData;
@@ -118,7 +127,7 @@ export default function RepresentmentPortal() {
         getColVal(row, "Reff Nr"),
         getColVal(row, "Id Trx"),
         getColVal(row, "Reference"),
-        getColVal(row, "Transaction Amount"),
+        formatRupiah(getColVal(row, "Transaction Amount")), // Format Rupiah
         getColVal(row, "Merchant Name"),
         getColVal(row, "Reason"),
         getColVal(row, "Parent Name"),
@@ -138,7 +147,6 @@ export default function RepresentmentPortal() {
   // LOGIKA PEMBUATAN PDF DAN ZIP
   // ==========================================
   
-  // Fungsi proxy untuk bypass limitasi gambar eksternal (CORS)
   const fetchImageAsDataURL = async (url) => {
     if (!url || url === "-") return null;
     const proxies = [
@@ -163,7 +171,6 @@ export default function RepresentmentPortal() {
     return null;
   };
 
-  // Fungsi untuk mendapatkan resolusi asli gambar agar proporsional di PDF
   const getImageDimensions = (base64) => {
     return new Promise((resolve) => {
       const img = new Image();
@@ -207,7 +214,7 @@ export default function RepresentmentPortal() {
       doc.text(`Reff Nr: ${reffNr}`, 15, startY); startY += 8;
       doc.text(`- Id Trx: ${getColVal(row, "Id Trx")}`, 15, startY); startY += 8;
       doc.text(`Reference: ${getColVal(row, "Reference")}`, 15, startY); startY += 8;
-      doc.text(`Transaction Amount: ${getColVal(row, "Transaction Amount")}`, 15, startY); startY += 8;
+      doc.text(`Transaction Amount: ${formatRupiah(getColVal(row, "Transaction Amount"))}`, 15, startY); startY += 8;
       doc.text(`Merchant Name: ${getColVal(row, "Merchant Name")}`, 15, startY); startY += 8;
       doc.text(`Reason: ${getColVal(row, "Reason")}`, 15, startY); startY += 14;
 
@@ -222,11 +229,10 @@ export default function RepresentmentPortal() {
           if (imgBase64) {
             const dims = await getImageDimensions(imgBase64);
             if (dims) {
-              // Menghitung aspect ratio agar muat 1 halaman
               let finalW = dims.w;
               let finalH = dims.h;
               const maxW = 180;
-              const maxH = 280 - startY; // Sisa space di halaman A4
+              const maxH = 280 - startY; 
               
               if (finalW > maxW) {
                 finalH = (maxW / finalW) * finalH;
@@ -237,7 +243,6 @@ export default function RepresentmentPortal() {
                 finalH = maxH;
               }
               
-              // Extract format (jpeg/png) dari base64
               const formatMatch = imgBase64.match(/data:image\/([a-zA-Z]*);base64,/);
               const format = formatMatch ? formatMatch[1].toUpperCase() : 'JPEG';
               
@@ -249,14 +254,14 @@ export default function RepresentmentPortal() {
         }
       }
 
-      // Menyimpan file PDF ke dalam memory ZIP
+      // Menambahkan file PDF ke Object ZIP
       const pdfBlob = doc.output("blob");
       const cleanReff = reffNr !== "-" ? reffNr : `UnknownReff_${i+1}`;
       const fileName = `Trx_${activeTab}_${cleanReff}.pdf`;
       zip.file(fileName, pdfBlob);
     }
 
-    // Generate ZIP dan Download
+    // Eksekusi Download ZIP ke Client
     zip.generateAsync({ type: "blob" }).then((content) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(content);
@@ -301,7 +306,7 @@ export default function RepresentmentPortal() {
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Reff Nr")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Id Trx")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Reference")}</td>
-                <td style={{ padding: '6px 4px' }}>{getColVal(row, "Transaction Amount")}</td>
+                <td style={{ padding: '6px 4px' }}>{formatRupiah(getColVal(row, "Transaction Amount"))}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Merchant Name")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Reason")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Parent Name")}</td>
