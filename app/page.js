@@ -104,7 +104,6 @@ export default function RepresentmentPortal() {
     return "Rp " + num.toLocaleString("id-ID");
   };
 
-  // Fungsi merapikan spasi berlebih
   const cleanSpacing = (text) => {
     if (!text || text === "-") return "-";
     return String(text).replace(/\s+/g, ' ').trim();
@@ -157,13 +156,12 @@ export default function RepresentmentPortal() {
 
     let urlsToTry = [originalUrl];
 
-    // Menangani link Google Drive khusus
     if (originalUrl.includes("drive.google.com") || originalUrl.includes("drive.usercontent.google.com")) {
       const matchId = originalUrl.match(/[-\w]{25,}/);
       if (matchId) {
         const id = matchId[0];
         urlsToTry = [
-          `https://lh3.googleusercontent.com/d/${id}`, // Endpoint rahasia GDrive terbaik untuk gambar
+          `https://lh3.googleusercontent.com/d/${id}`, 
           `https://drive.google.com/uc?export=view&id=${id}`
         ];
       }
@@ -182,7 +180,6 @@ export default function RepresentmentPortal() {
           const res = await fetch(proxy);
           if (!res.ok) continue;
 
-          // Memastikan yang ditarik adalah gambar, bukan file HTML Google Drive Error
           const blob = await res.blob();
           if (!blob.type.startsWith('image/')) continue; 
 
@@ -208,6 +205,16 @@ export default function RepresentmentPortal() {
     });
   };
 
+  // Helper memotong tanggal hanya mengambil Tanggal & Bulan (contoh: "04 April 2026" -> "04 April")
+  const formatDateName = (dateStr) => {
+    if (!dateStr || dateStr === "-") return "UnknownDate";
+    const parts = String(dateStr).trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return `${parts[0]} ${parts[1]}`;
+    }
+    return String(dateStr).replace(/[\/\\]/g, '-');
+  };
+
   const handleDownloadZip = async () => {
     let dataToProcess = [];
     if (activeTab === "ALTO") dataToProcess = altoData;
@@ -220,18 +227,24 @@ export default function RepresentmentPortal() {
     }
 
     setIsDownloading(true);
-    const zip = new JSZip();
+    const mainZip = new JSZip(); // Master ZIP
 
     for (let i = 0; i < dataToProcess.length; i++) {
       setDownloadProgress(`Memproses PDF ${i + 1} dari ${dataToProcess.length}...`);
-      await new Promise(resolve => setTimeout(resolve, 10)); // Jeda untuk render UI Progress
+      await new Promise(resolve => setTimeout(resolve, 10)); 
 
       const row = dataToProcess[i];
       const doc = new jsPDF();
       
       const bankIssuer = getColVal(row, "Bank Issuer");
+      const trxDateRaw = getColVal(row, "Transaction Date");
       const reffNr = getColVal(row, "Reff Nr");
       const cleanMerchant = cleanSpacing(getColVal(row, "Merchant Name"));
+      
+      // Formatting Nama File Base
+      const dateName = formatDateName(trxDateRaw);
+      const cleanReff = reffNr !== "-" ? reffNr : `UnknownReff_${i+1}`;
+      const baseFileName = `trx ${dateName} ${cleanReff}`;
       
       // ===== STRUKTUR PDF =====
       doc.setFontSize(12);
@@ -239,7 +252,7 @@ export default function RepresentmentPortal() {
       doc.text(String(bankIssuer).toUpperCase(), 15, 20);
 
       let startY = 30;
-      doc.text(`- Transaction Date: ${getColVal(row, "Transaction Date")}`, 15, startY); startY += 8;
+      doc.text(`- Transaction Date: ${trxDateRaw}`, 15, startY); startY += 8;
       doc.text(`- Reff Nr: ${reffNr}`, 15, startY); startY += 8;
       doc.text(`- Id Trx: ${getColVal(row, "Id Trx")}`, 15, startY); startY += 8;
       doc.text(`- Reference: ${getColVal(row, "Reference")}`, 15, startY); startY += 8;
@@ -261,7 +274,7 @@ export default function RepresentmentPortal() {
               let finalW = dims.w;
               let finalH = dims.h;
               const maxW = 180;
-              const maxH = 280 - startY; // Sisa space vertikal PDF A4
+              const maxH = 280 - startY; 
               
               if (finalW > maxW) {
                 finalH = (maxW / finalW) * finalH;
@@ -283,15 +296,22 @@ export default function RepresentmentPortal() {
         }
       }
 
+      // Generate PDF sebagai blob
       const pdfBlob = doc.output("blob");
-      const cleanReff = reffNr !== "-" ? reffNr : `UnknownReff_${i+1}`;
-      const fileName = `Trx_${activeTab}_${cleanReff}.pdf`;
-      zip.file(fileName, pdfBlob);
+      
+      // Buat Sub-ZIP per file
+      const subZip = new JSZip();
+      subZip.file(`${baseFileName}.pdf`, pdfBlob);
+      const subZipBlob = await subZip.generateAsync({ type: "blob" });
+
+      // Masukkan Sub-ZIP ke dalam Main ZIP
+      mainZip.file(`${baseFileName}.zip`, subZipBlob);
     }
 
-    setDownloadProgress("Membungkus ZIP...");
+    setDownloadProgress("Membungkus Master ZIP...");
     
-    zip.generateAsync({ type: "blob" }).then((content) => {
+    // Generate Main ZIP dan Download
+    mainZip.generateAsync({ type: "blob" }).then((content) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(content);
       link.download = `Representment_${activeTab}_Data.zip`;
