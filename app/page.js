@@ -104,6 +104,12 @@ export default function RepresentmentPortal() {
     return "Rp " + num.toLocaleString("id-ID");
   };
 
+  // Fungsi merapikan spasi berlebih
+  const cleanSpacing = (text) => {
+    if (!text || text === "-") return "-";
+    return String(text).replace(/\s+/g, ' ').trim();
+  };
+
   const handleCopyData = () => {
     let dataToCopy = [];
     if (activeTab === "ALTO") dataToCopy = altoData;
@@ -127,7 +133,7 @@ export default function RepresentmentPortal() {
         getColVal(row, "Id Trx"),
         getColVal(row, "Reference"),
         formatRupiah(getColVal(row, "Transaction Amount")), 
-        getColVal(row, "Merchant Name"),
+        cleanSpacing(getColVal(row, "Merchant Name")),
         getColVal(row, "Reason"),
         getColVal(row, "Parent Name"),
         getColVal(row, "Status"),
@@ -146,25 +152,48 @@ export default function RepresentmentPortal() {
   // LOGIKA PEMBUATAN PDF DAN ZIP
   // ==========================================
   
-  const fetchImageAsDataURL = async (url) => {
-    if (!url || url === "-") return null;
-    const proxies = [
+  const fetchImageAsDataURL = async (originalUrl) => {
+    if (!originalUrl || originalUrl === "-") return null;
+
+    let urlsToTry = [originalUrl];
+
+    // Menangani link Google Drive khusus
+    if (originalUrl.includes("drive.google.com") || originalUrl.includes("drive.usercontent.google.com")) {
+      const matchId = originalUrl.match(/[-\w]{25,}/);
+      if (matchId) {
+        const id = matchId[0];
+        urlsToTry = [
+          `https://lh3.googleusercontent.com/d/${id}`, // Endpoint rahasia GDrive terbaik untuk gambar
+          `https://drive.google.com/uc?export=view&id=${id}`
+        ];
+      }
+    }
+
+    const getProxies = (url) => [
+      `https://wsrv.nl/?url=${encodeURIComponent(url)}`,
       `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
       `https://corsproxy.io/?${encodeURIComponent(url)}`,
-      `https://wsrv.nl/?url=${encodeURIComponent(url)}`,
       url
     ];
-    for (let proxy of proxies) {
-      try {
-        const res = await fetch(proxy);
-        const blob = await res.blob();
-        return await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result);
-          reader.readAsDataURL(blob);
-        });
-      } catch (e) {
-        continue;
+
+    for (let url of urlsToTry) {
+      for (let proxy of getProxies(url)) {
+        try {
+          const res = await fetch(proxy);
+          if (!res.ok) continue;
+
+          // Memastikan yang ditarik adalah gambar, bukan file HTML Google Drive Error
+          const blob = await res.blob();
+          if (!blob.type.startsWith('image/')) continue; 
+
+          return await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.readAsDataURL(blob);
+          });
+        } catch (e) {
+          continue;
+        }
       }
     }
     return null;
@@ -194,15 +223,15 @@ export default function RepresentmentPortal() {
     const zip = new JSZip();
 
     for (let i = 0; i < dataToProcess.length; i++) {
-      // Update UI Progress, dan beri jeda agar UI React sempat nge-render tulisan progresnya
-      setDownloadProgress(`Memproses ${i + 1} dari ${dataToProcess.length}...`);
-      await new Promise(resolve => setTimeout(resolve, 10));
+      setDownloadProgress(`Memproses PDF ${i + 1} dari ${dataToProcess.length}...`);
+      await new Promise(resolve => setTimeout(resolve, 10)); // Jeda untuk render UI Progress
 
       const row = dataToProcess[i];
       const doc = new jsPDF();
       
       const bankIssuer = getColVal(row, "Bank Issuer");
       const reffNr = getColVal(row, "Reff Nr");
+      const cleanMerchant = cleanSpacing(getColVal(row, "Merchant Name"));
       
       // ===== STRUKTUR PDF =====
       doc.setFontSize(12);
@@ -215,34 +244,24 @@ export default function RepresentmentPortal() {
       doc.text(`- Id Trx: ${getColVal(row, "Id Trx")}`, 15, startY); startY += 8;
       doc.text(`- Reference: ${getColVal(row, "Reference")}`, 15, startY); startY += 8;
       doc.text(`- Transaction Amount: ${formatRupiah(getColVal(row, "Transaction Amount"))}`, 15, startY); startY += 8;
-      doc.text(`- Merchant Name: ${getColVal(row, "Merchant Name")}`, 15, startY); startY += 8;
+      doc.text(`- Merchant Name: ${cleanMerchant}`, 15, startY); startY += 8;
       doc.text(`- Reason: ${getColVal(row, "Reason")}`, 15, startY); startY += 14;
 
       doc.text("Keterangan barang sudah dikirim oleh merchant ke user/customer, berikut bukti invoice dari merchant:", 15, startY, { maxWidth: 180 });
       startY += 10;
 
-      // ===== PROSES INVOICE (Mengurai Google Drive) =====
+      // ===== PROSES INVOICE =====
       const invoiceUrl = getColVal(row, "Invoice");
       if (invoiceUrl && invoiceUrl.startsWith("http")) {
-        let fetchUrl = invoiceUrl;
-        
-        // Ekstraksi ID Google Drive untuk mendapatkan direct download link
-        if (invoiceUrl.includes("drive.google.com")) {
-          const matchId = invoiceUrl.match(/[-\w]{25,}/);
-          if (matchId) {
-            fetchUrl = `https://drive.google.com/uc?export=download&id=${matchId[0]}`;
-          }
-        }
-
         try {
-          const imgBase64 = await fetchImageAsDataURL(fetchUrl);
+          const imgBase64 = await fetchImageAsDataURL(invoiceUrl);
           if (imgBase64) {
             const dims = await getImageDimensions(imgBase64);
             if (dims) {
               let finalW = dims.w;
               let finalH = dims.h;
               const maxW = 180;
-              const maxH = 280 - startY; 
+              const maxH = 280 - startY; // Sisa space vertikal PDF A4
               
               if (finalW > maxW) {
                 finalH = (maxW / finalW) * finalH;
@@ -317,7 +336,7 @@ export default function RepresentmentPortal() {
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Id Trx")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Reference")}</td>
                 <td style={{ padding: '6px 4px' }}>{formatRupiah(getColVal(row, "Transaction Amount"))}</td>
-                <td style={{ padding: '6px 4px' }}>{getColVal(row, "Merchant Name")}</td>
+                <td style={{ padding: '6px 4px' }}>{cleanSpacing(getColVal(row, "Merchant Name"))}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Reason")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Parent Name")}</td>
                 <td style={{ padding: '6px 4px' }}>{getColVal(row, "Status")}</td>
