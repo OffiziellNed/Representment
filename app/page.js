@@ -196,6 +196,38 @@ export default function RepresentmentPortal() {
     return null;
   };
 
+  // Fungsi kompresi gambar via Canvas untuk mengurangi ukuran file PDF (Jadi hitungan KB)
+  const compressImage = (base64Str, maxWidth = 800, quality = 0.6) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        
+        // Background putih untuk menghindari background hitam kalau gambar asli PNG transparan
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Export paksa ke JPEG agar file lebih kecil (PNG murni bikin PDF bengkak MB-an)
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = () => resolve(base64Str); // Fallback kalau gagal render
+      img.src = base64Str;
+    });
+  };
+
   const getImageDimensions = (base64) => {
     return new Promise((resolve) => {
       const img = new Image();
@@ -265,8 +297,11 @@ export default function RepresentmentPortal() {
       const invoiceUrl = getColVal(row, "Invoice");
       if (invoiceUrl && invoiceUrl.startsWith("http")) {
         try {
-          const imgBase64 = await fetchImageAsDataURL(invoiceUrl);
-          if (imgBase64) {
+          const rawImgBase64 = await fetchImageAsDataURL(invoiceUrl);
+          if (rawImgBase64) {
+            // Kompresi gambar menjadi ukuran KB yang enteng
+            const imgBase64 = await compressImage(rawImgBase64, 800, 0.6);
+            
             const dims = await getImageDimensions(imgBase64);
             if (dims) {
               let finalW = dims.w;
@@ -283,10 +318,8 @@ export default function RepresentmentPortal() {
                 finalH = maxH;
               }
               
-              const formatMatch = imgBase64.match(/data:image\/([a-zA-Z]*);base64,/);
-              const format = formatMatch ? formatMatch[1].toUpperCase() : 'JPEG';
-              
-              doc.addImage(imgBase64, format, 15, startY, finalW, finalH);
+              // Masukkan sebagai format kompresi "JPEG" ke JS-PDF
+              doc.addImage(imgBase64, "JPEG", 15, startY, finalW, finalH, undefined, "FAST");
             }
           }
         } catch (e) {
@@ -309,12 +342,11 @@ export default function RepresentmentPortal() {
     const now = new Date();
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
-    const timeString = `${hours}.${minutes}`; // Format HH.MM
+    const timeString = `${hours}.${minutes}`; 
     
-    mainZip.generateAsync({ type: "blob" }).then((content) => {
+    mainZip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } }).then((content) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(content);
-      // Format Nama ZIP: DATA ALTO 16.05.zip
       link.download = `DATA ${activeTab} ${timeString}.zip`;
       link.click();
       setIsDownloading(false);
