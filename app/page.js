@@ -205,7 +205,6 @@ export default function RepresentmentPortal() {
     });
   };
 
-  // Helper memotong tanggal hanya mengambil Tanggal & Bulan (contoh: "04 April 2026" -> "04 April")
   const formatDateName = (dateStr) => {
     if (!dateStr || dateStr === "-") return "UnknownDate";
     const parts = String(dateStr).trim().split(/\s+/);
@@ -227,7 +226,7 @@ export default function RepresentmentPortal() {
     }
 
     setIsDownloading(true);
-    const mainZip = new JSZip(); // Master ZIP
+    const mainZip = new JSZip(); 
 
     for (let i = 0; i < dataToProcess.length; i++) {
       setDownloadProgress(`Memproses PDF ${i + 1} dari ${dataToProcess.length}...`);
@@ -241,7 +240,6 @@ export default function RepresentmentPortal() {
       const reffNr = getColVal(row, "Reff Nr");
       const cleanMerchant = cleanSpacing(getColVal(row, "Merchant Name"));
       
-      // Formatting Nama File Base
       const dateName = formatDateName(trxDateRaw);
       const cleanReff = reffNr !== "-" ? reffNr : `UnknownReff_${i+1}`;
       const baseFileName = `trx ${dateName} ${cleanReff}`;
@@ -296,25 +294,28 @@ export default function RepresentmentPortal() {
         }
       }
 
-      // Generate PDF sebagai blob
       const pdfBlob = doc.output("blob");
       
-      // Buat Sub-ZIP per file
       const subZip = new JSZip();
       subZip.file(`${baseFileName}.pdf`, pdfBlob);
       const subZipBlob = await subZip.generateAsync({ type: "blob" });
 
-      // Masukkan Sub-ZIP ke dalam Main ZIP
       mainZip.file(`${baseFileName}.zip`, subZipBlob);
     }
 
     setDownloadProgress("Membungkus Master ZIP...");
     
-    // Generate Main ZIP dan Download
+    // Generate Jam saat didownload
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const timeString = `${hours}.${minutes}`; // Format HH.MM
+    
     mainZip.generateAsync({ type: "blob" }).then((content) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(content);
-      link.download = `Representment_${activeTab}_Data.zip`;
+      // Format Nama ZIP: DATA ALTO 16.05.zip
+      link.download = `DATA ${activeTab} ${timeString}.zip`;
       link.click();
       setIsDownloading(false);
       setDownloadProgress("");
