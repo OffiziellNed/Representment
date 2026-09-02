@@ -15,6 +15,7 @@ export default function RepresentmentPortal() {
   const [rrnData, setRrnData] = useState([]);
   
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState("");
 
   useEffect(() => {
     processFiles(uploadedFiles);
@@ -96,12 +97,10 @@ export default function RepresentmentPortal() {
     return key && row[key] !== undefined && row[key] !== "" ? row[key] : "-";
   };
 
-  // Fungsi untuk memformat angka menjadi format Rupiah standar (titik untuk ribuan)
   const formatRupiah = (value) => {
     if (!value || value === "-") return "-";
-    // Bersihkan karakter selain angka
     const num = Number(String(value).replace(/[^0-9.-]+/g, ""));
-    if (isNaN(num)) return value; // Jika bukan angka, kembalikan teks aslinya
+    if (isNaN(num)) return value; 
     return "Rp " + num.toLocaleString("id-ID");
   };
 
@@ -127,7 +126,7 @@ export default function RepresentmentPortal() {
         getColVal(row, "Reff Nr"),
         getColVal(row, "Id Trx"),
         getColVal(row, "Reference"),
-        formatRupiah(getColVal(row, "Transaction Amount")), // Format Rupiah
+        formatRupiah(getColVal(row, "Transaction Amount")), 
         getColVal(row, "Merchant Name"),
         getColVal(row, "Reason"),
         getColVal(row, "Parent Name"),
@@ -151,8 +150,8 @@ export default function RepresentmentPortal() {
     if (!url || url === "-") return null;
     const proxies = [
       `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-      `https://wsrv.nl/?url=${encodeURIComponent(url)}`,
       `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      `https://wsrv.nl/?url=${encodeURIComponent(url)}`,
       url
     ];
     for (let proxy of proxies) {
@@ -195,6 +194,10 @@ export default function RepresentmentPortal() {
     const zip = new JSZip();
 
     for (let i = 0; i < dataToProcess.length; i++) {
+      // Update UI Progress, dan beri jeda agar UI React sempat nge-render tulisan progresnya
+      setDownloadProgress(`Memproses ${i + 1} dari ${dataToProcess.length}...`);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
       const row = dataToProcess[i];
       const doc = new jsPDF();
       
@@ -202,30 +205,37 @@ export default function RepresentmentPortal() {
       const reffNr = getColVal(row, "Reff Nr");
       
       // ===== STRUKTUR PDF =====
-      doc.setFontSize(16);
-      doc.setFont("helvetica", "bold");
-      doc.text(bankIssuer, 15, 20);
-
-      doc.setFontSize(11);
+      doc.setFontSize(12);
       doc.setFont("helvetica", "normal");
-      
-      let startY = 32;
-      doc.text(`Transaction Date: ${getColVal(row, "Transaction Date")}`, 15, startY); startY += 8;
-      doc.text(`Reff Nr: ${reffNr}`, 15, startY); startY += 8;
+      doc.text(String(bankIssuer).toUpperCase(), 15, 20);
+
+      let startY = 30;
+      doc.text(`- Transaction Date: ${getColVal(row, "Transaction Date")}`, 15, startY); startY += 8;
+      doc.text(`- Reff Nr: ${reffNr}`, 15, startY); startY += 8;
       doc.text(`- Id Trx: ${getColVal(row, "Id Trx")}`, 15, startY); startY += 8;
-      doc.text(`Reference: ${getColVal(row, "Reference")}`, 15, startY); startY += 8;
-      doc.text(`Transaction Amount: ${formatRupiah(getColVal(row, "Transaction Amount"))}`, 15, startY); startY += 8;
-      doc.text(`Merchant Name: ${getColVal(row, "Merchant Name")}`, 15, startY); startY += 8;
-      doc.text(`Reason: ${getColVal(row, "Reason")}`, 15, startY); startY += 14;
+      doc.text(`- Reference: ${getColVal(row, "Reference")}`, 15, startY); startY += 8;
+      doc.text(`- Transaction Amount: ${formatRupiah(getColVal(row, "Transaction Amount"))}`, 15, startY); startY += 8;
+      doc.text(`- Merchant Name: ${getColVal(row, "Merchant Name")}`, 15, startY); startY += 8;
+      doc.text(`- Reason: ${getColVal(row, "Reason")}`, 15, startY); startY += 14;
 
       doc.text("Keterangan barang sudah dikirim oleh merchant ke user/customer, berikut bukti invoice dari merchant:", 15, startY, { maxWidth: 180 });
       startY += 10;
 
-      // ===== PROSES INVOICE =====
+      // ===== PROSES INVOICE (Mengurai Google Drive) =====
       const invoiceUrl = getColVal(row, "Invoice");
       if (invoiceUrl && invoiceUrl.startsWith("http")) {
+        let fetchUrl = invoiceUrl;
+        
+        // Ekstraksi ID Google Drive untuk mendapatkan direct download link
+        if (invoiceUrl.includes("drive.google.com")) {
+          const matchId = invoiceUrl.match(/[-\w]{25,}/);
+          if (matchId) {
+            fetchUrl = `https://drive.google.com/uc?export=download&id=${matchId[0]}`;
+          }
+        }
+
         try {
-          const imgBase64 = await fetchImageAsDataURL(invoiceUrl);
+          const imgBase64 = await fetchImageAsDataURL(fetchUrl);
           if (imgBase64) {
             const dims = await getImageDimensions(imgBase64);
             if (dims) {
@@ -254,24 +264,24 @@ export default function RepresentmentPortal() {
         }
       }
 
-      // Menambahkan file PDF ke Object ZIP
       const pdfBlob = doc.output("blob");
       const cleanReff = reffNr !== "-" ? reffNr : `UnknownReff_${i+1}`;
       const fileName = `Trx_${activeTab}_${cleanReff}.pdf`;
       zip.file(fileName, pdfBlob);
     }
 
-    // Eksekusi Download ZIP ke Client
+    setDownloadProgress("Membungkus ZIP...");
+    
     zip.generateAsync({ type: "blob" }).then((content) => {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(content);
       link.download = `Representment_${activeTab}_Data.zip`;
       link.click();
       setIsDownloading(false);
+      setDownloadProgress("");
     });
   };
 
-  // Menghitung Sub-Kategori RRN NO DATA
   const rrnAltoCount = rrnData.filter(r => getColVal(r, 'swtc').toUpperCase() === 'ALT').length;
   const rrnRintisCount = rrnData.filter(r => getColVal(r, 'swtc').toUpperCase() === 'RTS').length;
 
@@ -427,9 +437,9 @@ export default function RepresentmentPortal() {
             <button 
               onClick={handleDownloadZip}
               disabled={isDownloading}
-              style={{ padding: '8px 16px', backgroundColor: isDownloading ? '#2ea043' : '#238636', color: '#fff', border: '1px solid #2ea043', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: isDownloading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: isDownloading ? 0.7 : 1 }}
+              style={{ padding: '8px 16px', backgroundColor: isDownloading ? '#2ea043' : '#238636', color: '#fff', border: '1px solid #2ea043', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: isDownloading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: isDownloading ? 0.7 : 1, minWidth: '180px', justifyContent: 'center' }}
             >
-              {isDownloading ? '⏳ Memproses ZIP...' : `📦 Download ZIP ${activeTab}`}
+              {isDownloading ? `⏳ ${downloadProgress}` : `📦 Download ZIP ${activeTab}`}
             </button>
           </div>
         </div>
