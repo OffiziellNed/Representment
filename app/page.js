@@ -10,8 +10,8 @@ export default function RepresentmentPortal() {
   const [totalDataCount, setTotalDataCount] = useState(0);
   const [altoData, setAltoData] = useState([]);
   const [rintisData, setRintisData] = useState([]);
+  const [rrnData, setRrnData] = useState([]);
 
-  // Trigger proses Excel setiap kali state uploadedFiles berubah
   useEffect(() => {
     processFiles(uploadedFiles);
   }, [uploadedFiles]);
@@ -20,10 +20,7 @@ export default function RepresentmentPortal() {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
     
-    // Tambahkan file baru ke state (gabung dengan yang sudah ada)
     setUploadedFiles(prev => [...prev, ...files]);
-    
-    // Reset input file agar bisa memilih file yang sama lagi jika dihapus
     e.target.value = null;
   };
 
@@ -36,6 +33,7 @@ export default function RepresentmentPortal() {
       setTotalDataCount(0);
       setAltoData([]);
       setRintisData([]);
+      setRrnData([]);
       return;
     }
 
@@ -47,7 +45,6 @@ export default function RepresentmentPortal() {
       
       workbook.SheetNames.forEach((sheetName) => {
         const sheet = workbook.Sheets[sheetName];
-        // defval: "" menghindari field terhapus jika kosong di excel
         const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
         allParsedData = [...allParsedData, ...json];
       });
@@ -57,13 +54,25 @@ export default function RepresentmentPortal() {
 
     const alto = [];
     const rintis = [];
+    const rrn = [];
 
-    // Logika pencarian SWTC super robust
     allParsedData.forEach((row) => {
-      // Cari key/header yang mengandung huruf "swtc" (mengabaikan spasi atau huruf besar/kecil)
       const swtcKey = Object.keys(row).find(key => key.trim().toLowerCase().includes('swtc'));
+      const statusKey = Object.keys(row).find(key => key.trim().toLowerCase().includes('status'));
       
-      if (swtcKey) {
+      let isRrn = false;
+      
+      // Filter untuk RRN No Data
+      if (statusKey) {
+        const statusVal = String(row[statusKey]).trim().toLowerCase();
+        if (statusVal.includes('rrn no data')) {
+          rrn.push(row);
+          isRrn = true;
+        }
+      }
+
+      // Jika bukan RRN No Data, pilah berdasarkan SWTC
+      if (!isRrn && swtcKey) {
         const val = String(row[swtcKey]).trim().toUpperCase();
         if (val === 'ALT') {
           alto.push(row);
@@ -75,11 +84,10 @@ export default function RepresentmentPortal() {
 
     setAltoData(alto);
     setRintisData(rintis);
+    setRrnData(rrn);
   };
 
-  // Helper agar data di kolom tetap terbaca meskipun nama header ada spasi tersembunyi
   const getColVal = (row, colName) => {
-    // Coba cari exact match dulu, kalau gagal cari yang mengandung kata tersebut
     let key = Object.keys(row).find(k => k.trim().toLowerCase() === colName.toLowerCase());
     if (!key) {
       key = Object.keys(row).find(k => k.trim().toLowerCase().includes(colName.toLowerCase()));
@@ -88,7 +96,11 @@ export default function RepresentmentPortal() {
   };
 
   const handleCopyData = () => {
-    const dataToCopy = activeTab === "ALTO" ? altoData : rintisData;
+    let dataToCopy = [];
+    if (activeTab === "ALTO") dataToCopy = altoData;
+    else if (activeTab === "RINTIS") dataToCopy = rintisData;
+    else if (activeTab === "RRN") dataToCopy = rrnData;
+
     if (dataToCopy.length === 0) {
       alert("Tidak ada data untuk di-copy.");
       return;
@@ -96,7 +108,6 @@ export default function RepresentmentPortal() {
 
     const headers = ["No", "SWTC", "Bank Issuer", "Transaction Date", "Reff Nr", "Id Trx", "Reference", "Transaction Amount", "Merchant Name", "Reason", "Parent Name", "Status", "Invoice"];
     
-    // Map data menjadi format tab-separated agar rapi saat dipaste di Excel
     const rows = dataToCopy.map((row, index) => {
       return [
         index + 1,
@@ -176,21 +187,18 @@ export default function RepresentmentPortal() {
   return (
     <div style={{ width: '100%', maxWidth: '1400px', margin: '0 auto', padding: '20px', fontFamily: 'sans-serif' }}>
       
-      {/* HEADER */}
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '30px' }}>
         <h1 style={{ fontSize: '24px', fontWeight: '800', letterSpacing: '1px', color: '#ffffff', margin: 0 }}>
           📊 REPRESENTMENT
         </h1>
       </div>
 
-      {/* DASHBOARD UTAMA */}
       <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '16px', padding: '24px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
         
         <h2 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '16px', color: '#c9d1d9', borderBottom: '1px solid #30363d', paddingBottom: '8px' }}>
           Upload File Rekapitulasi (.xlsx / .xls)
         </h2>
         
-        {/* Uploader Modern */}
         <div style={{ backgroundColor: '#0d1117', border: '1px dashed #30363d', padding: '20px', borderRadius: '10px', marginBottom: '24px' }}>
           <label style={{ display: 'inline-block', backgroundColor: '#1f6feb', color: '#ffffff', padding: '10px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', transition: 'background-color 0.2s' }}>
             ➕ Pilih File Excel
@@ -203,7 +211,6 @@ export default function RepresentmentPortal() {
             />
           </label>
           
-          {/* Daftar File yang diupload dengan opsi Hapus */}
           {uploadedFiles.length > 0 && (
             <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {uploadedFiles.map((file, idx) => (
@@ -224,23 +231,25 @@ export default function RepresentmentPortal() {
           )}
         </div>
 
-        {/* Indikator Hitungan */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginBottom: '24px' }}>
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>TOTAL ROW TERBACA</div>
+            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>TOTAL ROW</div>
             <div style={{ fontSize: '28px', color: '#ffffff', fontWeight: '900', marginTop: '4px' }}>{totalDataCount}</div>
           </div>
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #1f6feb', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>DATA ALTO (ALT)</div>
+            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>DATA ALTO</div>
             <div style={{ fontSize: '28px', color: '#58a6ff', fontWeight: '900', marginTop: '4px' }}>{altoData.length}</div>
           </div>
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #f85149', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>DATA RINTIS (RTS)</div>
+            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>DATA RINTIS</div>
             <div style={{ fontSize: '28px', color: '#ff7b72', fontWeight: '900', marginTop: '4px' }}>{rintisData.length}</div>
+          </div>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #d29922', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>RRN NO DATA</div>
+            <div style={{ fontSize: '28px', color: '#e3b341', fontWeight: '900', marginTop: '4px' }}>{rrnData.length}</div>
           </div>
         </div>
 
-        {/* Action Bar: Tab Filter & Tombol Copy */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #30363d', paddingBottom: '16px' }}>
           <div style={{ display: 'flex', gap: '10px' }}>
             <button 
@@ -255,6 +264,12 @@ export default function RepresentmentPortal() {
             >
               RINTIS
             </button>
+            <button 
+              onClick={() => setActiveTab("RRN")}
+              style={{ padding: '8px 24px', backgroundColor: activeTab === "RRN" ? '#d29922' : '#21262d', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
+            >
+              RRN NO DATA
+            </button>
           </div>
           
           <button 
@@ -265,8 +280,9 @@ export default function RepresentmentPortal() {
           </button>
         </div>
 
-        {/* Tampilkan Tabel Sesuai Tab Aktif */}
-        {activeTab === "ALTO" ? renderTable(altoData) : renderTable(rintisData)}
+        {activeTab === "ALTO" && renderTable(altoData)}
+        {activeTab === "RINTIS" && renderTable(rintisData)}
+        {activeTab === "RRN" && renderTable(rrnData)}
 
       </div>
     </div>
