@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
+import { jsPDF } from "jspdf";
+import JSZip from "jszip";
 
 export default function RepresentmentPortal() {
   const [activeTab, setActiveTab] = useState("ALTO");
@@ -11,6 +13,8 @@ export default function RepresentmentPortal() {
   const [altoData, setAltoData] = useState([]);
   const [rintisData, setRintisData] = useState([]);
   const [rrnData, setRrnData] = useState([]);
+  
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     processFiles(uploadedFiles);
@@ -19,7 +23,6 @@ export default function RepresentmentPortal() {
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
-    
     setUploadedFiles(prev => [...prev, ...files]);
     e.target.value = null;
   };
@@ -62,7 +65,6 @@ export default function RepresentmentPortal() {
       
       let isRrn = false;
       
-      // Filter untuk RRN No Data
       if (statusKey) {
         const statusVal = String(row[statusKey]).trim().toLowerCase();
         if (statusVal.includes('rrn no data')) {
@@ -71,7 +73,6 @@ export default function RepresentmentPortal() {
         }
       }
 
-      // Jika bukan RRN No Data, pilah berdasarkan SWTC
       if (!isRrn && swtcKey) {
         const val = String(row[swtcKey]).trim().toUpperCase();
         if (val === 'ALT') {
@@ -132,6 +133,142 @@ export default function RepresentmentPortal() {
       .then(() => alert(`Berhasil meng-copy ${dataToCopy.length} data ${activeTab}!`))
       .catch(() => alert("Gagal meng-copy data."));
   };
+
+  // ==========================================
+  // LOGIKA PEMBUATAN PDF DAN ZIP
+  // ==========================================
+  
+  // Fungsi proxy untuk bypass limitasi gambar eksternal (CORS)
+  const fetchImageAsDataURL = async (url) => {
+    if (!url || url === "-") return null;
+    const proxies = [
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      `https://wsrv.nl/?url=${encodeURIComponent(url)}`,
+      `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      url
+    ];
+    for (let proxy of proxies) {
+      try {
+        const res = await fetch(proxy);
+        const blob = await res.blob();
+        return await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        continue;
+      }
+    }
+    return null;
+  };
+
+  // Fungsi untuk mendapatkan resolusi asli gambar agar proporsional di PDF
+  const getImageDimensions = (base64) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ w: img.width, h: img.height });
+      img.onerror = () => resolve(null);
+      img.src = base64;
+    });
+  };
+
+  const handleDownloadZip = async () => {
+    let dataToProcess = [];
+    if (activeTab === "ALTO") dataToProcess = altoData;
+    else if (activeTab === "RINTIS") dataToProcess = rintisData;
+    else if (activeTab === "RRN") dataToProcess = rrnData;
+
+    if (dataToProcess.length === 0) {
+      alert("Tidak ada data untuk di-download.");
+      return;
+    }
+
+    setIsDownloading(true);
+    const zip = new JSZip();
+
+    for (let i = 0; i < dataToProcess.length; i++) {
+      const row = dataToProcess[i];
+      const doc = new jsPDF();
+      
+      const bankIssuer = getColVal(row, "Bank Issuer");
+      const reffNr = getColVal(row, "Reff Nr");
+      
+      // ===== STRUKTUR PDF =====
+      doc.setFontSize(16);
+      doc.setFont("helvetica", "bold");
+      doc.text(bankIssuer, 15, 20);
+
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "normal");
+      
+      let startY = 32;
+      doc.text(`Transaction Date: ${getColVal(row, "Transaction Date")}`, 15, startY); startY += 8;
+      doc.text(`Reff Nr: ${reffNr}`, 15, startY); startY += 8;
+      doc.text(`- Id Trx: ${getColVal(row, "Id Trx")}`, 15, startY); startY += 8;
+      doc.text(`Reference: ${getColVal(row, "Reference")}`, 15, startY); startY += 8;
+      doc.text(`Transaction Amount: ${getColVal(row, "Transaction Amount")}`, 15, startY); startY += 8;
+      doc.text(`Merchant Name: ${getColVal(row, "Merchant Name")}`, 15, startY); startY += 8;
+      doc.text(`Reason: ${getColVal(row, "Reason")}`, 15, startY); startY += 14;
+
+      doc.text("Keterangan barang sudah dikirim oleh merchant ke user/customer, berikut bukti invoice dari merchant:", 15, startY, { maxWidth: 180 });
+      startY += 10;
+
+      // ===== PROSES INVOICE =====
+      const invoiceUrl = getColVal(row, "Invoice");
+      if (invoiceUrl && invoiceUrl.startsWith("http")) {
+        try {
+          const imgBase64 = await fetchImageAsDataURL(invoiceUrl);
+          if (imgBase64) {
+            const dims = await getImageDimensions(imgBase64);
+            if (dims) {
+              // Menghitung aspect ratio agar muat 1 halaman
+              let finalW = dims.w;
+              let finalH = dims.h;
+              const maxW = 180;
+              const maxH = 280 - startY; // Sisa space di halaman A4
+              
+              if (finalW > maxW) {
+                finalH = (maxW / finalW) * finalH;
+                finalW = maxW;
+              }
+              if (finalH > maxH) {
+                finalW = (maxH / finalH) * finalW;
+                finalH = maxH;
+              }
+              
+              // Extract format (jpeg/png) dari base64
+              const formatMatch = imgBase64.match(/data:image\/([a-zA-Z]*);base64,/);
+              const format = formatMatch ? formatMatch[1].toUpperCase() : 'JPEG';
+              
+              doc.addImage(imgBase64, format, 15, startY, finalW, finalH);
+            }
+          }
+        } catch (e) {
+          console.error("Gagal memuat gambar invoice:", e);
+        }
+      }
+
+      // Menyimpan file PDF ke dalam memory ZIP
+      const pdfBlob = doc.output("blob");
+      const cleanReff = reffNr !== "-" ? reffNr : `UnknownReff_${i+1}`;
+      const fileName = `Trx_${activeTab}_${cleanReff}.pdf`;
+      zip.file(fileName, pdfBlob);
+    }
+
+    // Generate ZIP dan Download
+    zip.generateAsync({ type: "blob" }).then((content) => {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(content);
+      link.download = `Representment_${activeTab}_Data.zip`;
+      link.click();
+      setIsDownloading(false);
+    });
+  };
+
+  // Menghitung Sub-Kategori RRN NO DATA
+  const rrnAltoCount = rrnData.filter(r => getColVal(r, 'swtc').toUpperCase() === 'ALT').length;
+  const rrnRintisCount = rrnData.filter(r => getColVal(r, 'swtc').toUpperCase() === 'RTS').length;
 
   const renderTable = (data) => (
     <div style={{ marginTop: '20px', borderRadius: '8px', border: '1px solid #30363d', backgroundColor: '#0d1117', width: '100%' }}>
@@ -236,17 +373,20 @@ export default function RepresentmentPortal() {
             <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>TOTAL ROW</div>
             <div style={{ fontSize: '28px', color: '#ffffff', fontWeight: '900', marginTop: '4px' }}>{totalDataCount}</div>
           </div>
-          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #1f6feb', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #1f6feb', borderRadius: '10px', padding: '16px', textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>DATA ALTO</div>
             <div style={{ fontSize: '28px', color: '#58a6ff', fontWeight: '900', marginTop: '4px' }}>{altoData.length}</div>
           </div>
-          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #f85149', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #f85149', borderRadius: '10px', padding: '16px', textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>DATA RINTIS</div>
             <div style={{ fontSize: '28px', color: '#ff7b72', fontWeight: '900', marginTop: '4px' }}>{rintisData.length}</div>
           </div>
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderTop: '3px solid #d29922', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
             <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', letterSpacing: '1px' }}>RRN NO DATA</div>
-            <div style={{ fontSize: '28px', color: '#e3b341', fontWeight: '900', marginTop: '4px' }}>{rrnData.length}</div>
+            <div style={{ fontSize: '28px', color: '#e3b341', fontWeight: '900', marginTop: '4px', marginBottom: '8px' }}>{rrnData.length}</div>
+            <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: '600' }}>
+              <span style={{ color: '#58a6ff' }}>ALT: {rrnAltoCount}</span><span style={{ margin: '0 6px' }}>|</span><span style={{ color: '#ff7b72' }}>RTS: {rrnRintisCount}</span>
+            </div>
           </div>
         </div>
 
@@ -272,12 +412,21 @@ export default function RepresentmentPortal() {
             </button>
           </div>
           
-          <button 
-            onClick={handleCopyData}
-            style={{ padding: '8px 16px', backgroundColor: '#238636', color: '#fff', border: '1px solid #2ea043', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            📋 Copy Data {activeTab}
-          </button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button 
+              onClick={handleCopyData}
+              style={{ padding: '8px 16px', backgroundColor: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              📋 Copy
+            </button>
+            <button 
+              onClick={handleDownloadZip}
+              disabled={isDownloading}
+              style={{ padding: '8px 16px', backgroundColor: isDownloading ? '#2ea043' : '#238636', color: '#fff', border: '1px solid #2ea043', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: isDownloading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: isDownloading ? 0.7 : 1 }}
+            >
+              {isDownloading ? '⏳ Memproses ZIP...' : `📦 Download ZIP ${activeTab}`}
+            </button>
+          </div>
         </div>
 
         {activeTab === "ALTO" && renderTable(altoData)}
